@@ -1,0 +1,17 @@
+# CampusFlow keeps placement data behind authentication.
+User-agent: *
+Allow: /login
+Disallow: /dashboard
+Disallow: /students
+Disallow: /placements
+Disallow: /applications
+Disallow: /pipeline
+Disallow: /attendance
+Disallow: /courses
+Disallow: /companies
+Disallow: /analytics
+Disallow: /ai-studio
+Disallow: /profile
+Disallow: /api/
+
+Sitemap: /sitemap.xml

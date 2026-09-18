@@ -1,0 +1,28 @@
+**/node_modules
+**/dist
+**/.next
+**/out
+**/coverage
+**/.turbo
+**/.vercel
+
+# python
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+
+# data & secrets
+**/data/faiss/*.index
+**/data/faiss/*.json
+**/.env
+**/.env.local
+**/.env.*.local
+
+# tooling
+.git
+.github
+**/*.log
+docs
+README.md

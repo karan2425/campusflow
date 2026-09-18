@@ -1,0 +1,418 @@
+// CampusFlow — PostgreSQL schema (Prisma ORM)
+// Covers academics (departments, courses, attendance) and placements
+// (companies, jobs, applications, interviews, offers) plus AI telemetry.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  PLACEMENT_OFFICER
+  FACULTY
+  STUDENT
+}
+
+enum PlacementStatus {
+  NOT_ELIGIBLE
+  ELIGIBLE
+  IN_PROCESS
+  PLACED
+  OPTED_OUT
+}
+
+enum JobType {
+  FULL_TIME
+  INTERNSHIP
+  INTERNSHIP_PPO
+  PART_TIME
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum ApplicationStatus {
+  APPLIED
+  UNDER_REVIEW
+  SHORTLISTED
+  INTERVIEW_SCHEDULED
+  INTERVIEWED
+  OFFERED
+  REJECTED
+  WITHDRAWN
+}
+
+enum InterviewMode {
+  ONLINE
+  IN_PERSON
+  TELEPHONIC
+}
+
+enum InterviewResult {
+  PENDING
+  CLEARED
+  FAILED
+  NO_SHOW
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum EnrollmentStatus {
+  ENROLLED
+  COMPLETED
+  DROPPED
+}
+
+enum NotificationType {
+  INFO
+  PLACEMENT
+  ACADEMIC
+  ALERT
+  AI
+}
+
+enum AIInteractionKind {
+  CHAT
+  RESUME_MATCH
+  CANDIDATE_SHORTLIST
+  ATS_SCORE
+  INTERVIEW_QUESTIONS
+  RESUME_PARSE
+}
+
+// ----------------------------------------------------------------------------
+// Identity
+// ----------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         Role      @default(STUDENT)
+  phone        String?
+  avatarUrl    String?
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  student       Student?
+  faculty       Faculty?
+  notifications Notification[]
+  aiInteractions AIInteraction[]
+
+  @@index([role])
+  @@map("users")
+}
+
+// ----------------------------------------------------------------------------
+// Academics
+// ----------------------------------------------------------------------------
+
+model Department {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  hodName   String?
+  createdAt DateTime @default(now())
+
+  students Student[]
+  faculty  Faculty[]
+  courses  Course[]
+
+  @@map("departments")
+}
+
+model Student {
+  id              String          @id @default(cuid())
+  userId          String          @unique
+  rollNo          String          @unique
+  departmentId    String
+  batch           Int // graduation year, e.g. 2026
+  currentSemester Int             @default(1)
+  cgpa            Float           @default(0)
+  backlogs        Int             @default(0)
+  skills          String[]        @default([])
+  placementStatus PlacementStatus @default(ELIGIBLE)
+  resumeUrl       String?
+  resumeText      String?
+  githubUrl       String?
+  linkedinUrl     String?
+  city            String?
+  about           String?
+  githubScore     Int?
+  codingScore     Int?
+  verified        Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department   Department        @relation(fields: [departmentId], references: [id])
+  enrollments  Enrollment[]
+  attendance   AttendanceRecord[]
+  applications Application[]
+  offers       Offer[]
+
+  @@index([departmentId, batch])
+  @@index([placementStatus])
+  @@index([cgpa])
+  @@map("students")
+}
+
+model Faculty {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  employeeCode String   @unique
+  departmentId String
+  designation  String
+  specialization String?
+  joinedAt     DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id])
+  courses    Course[]
+
+  @@map("faculty")
+}
+
+model Course {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  title        String
+  credits      Int      @default(3)
+  semester     Int
+  departmentId String
+  facultyId    String?
+  description  String?
+  createdAt    DateTime @default(now())
+
+  department  Department         @relation(fields: [departmentId], references: [id])
+  faculty     Faculty?           @relation(fields: [facultyId], references: [id])
+  enrollments Enrollment[]
+  sessions    AttendanceSession[]
+
+  @@index([departmentId, semester])
+  @@map("courses")
+}
+
+model Enrollment {
+  id        String           @id @default(cuid())
+  studentId String
+  courseId  String
+  status    EnrollmentStatus @default(ENROLLED)
+  grade     String?
+  marks     Int?
+  createdAt DateTime         @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, courseId])
+  @@map("enrollments")
+}
+
+model AttendanceSession {
+  id        String   @id @default(cuid())
+  courseId  String
+  date      DateTime
+  topic     String?
+  takenById String?
+  createdAt DateTime @default(now())
+
+  course  Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  records AttendanceRecord[]
+
+  @@index([courseId, date])
+  @@map("attendance_sessions")
+}
+
+model AttendanceRecord {
+  id        String           @id @default(cuid())
+  sessionId String
+  studentId String
+  status    AttendanceStatus @default(PRESENT)
+  note      String?
+
+  session AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId])
+  @@index([studentId, status])
+  @@map("attendance_records")
+}
+
+// ----------------------------------------------------------------------------
+// Placements
+// ----------------------------------------------------------------------------
+
+model Company {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  website     String?
+  industry    String?
+  tier        String? // Tier 1 / Tier 2 / Startup / Product / Service
+  hqCity      String?
+  hrName      String?
+  hrEmail     String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  jobs JobPosting[]
+
+  @@map("companies")
+}
+
+model JobPosting {
+  id                String    @id @default(cuid())
+  companyId         String
+  title             String
+  description       String
+  type              JobType   @default(FULL_TIME)
+  status            JobStatus @default(OPEN)
+  location          String
+  workMode          String?   @default("Hybrid")
+  ctcMin            Float // LPA
+  ctcMax            Float
+  stipendPerMonth   Int?
+  minCgpa           Float     @default(6.0)
+  maxBacklogs       Int       @default(0)
+  allowedDepartments String[] @default([])
+  batches           Int[]     @default([])
+  skills            String[]  @default([])
+  openings          Int       @default(1)
+  bondMonths        Int?
+  deadline          DateTime
+  postedAt          DateTime  @default(now())
+  createdById       String?
+
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  applications Application[]
+
+  @@index([status, deadline])
+  @@index([companyId])
+  @@map("job_postings")
+}
+
+model Application {
+  id               String            @id @default(cuid())
+  jobId            String
+  studentId        String
+  status           ApplicationStatus @default(APPLIED)
+  matchScore       Float? // AI: 0-100 hybrid fit score
+  atsScore         Float? // AI: resume vs JD keyword/structure score
+  aiSummary        String? // AI recruiter-facing rationale
+  matchedSkills    String[]          @default([])
+  missingSkills    String[]          @default([])
+  coverNote        String?
+  resumeUrl        String?
+  source           String            @default("STUDENT")
+  appliedAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  job       JobPosting  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  student   Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  interviews Interview[]
+  offers     Offer[]
+
+  @@unique([jobId, studentId])
+  @@index([status])
+  @@index([matchScore])
+  @@map("applications")
+}
+
+model Interview {
+  id            String          @id @default(cuid())
+  applicationId String
+  round         Int             @default(1)
+  name          String          @default("Technical Round")
+  scheduledAt   DateTime
+  durationMins  Int             @default(45)
+  mode          InterviewMode   @default(ONLINE)
+  meetingLink   String?
+  interviewer   String?
+  result        InterviewResult @default(PENDING)
+  feedback      String?
+  score         Int?
+  createdAt     DateTime        @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([scheduledAt])
+  @@map("interviews")
+}
+
+model Offer {
+  id            String   @id @default(cuid())
+  applicationId String
+  studentId     String
+  companyName   String
+  role          String
+  ctc           Float
+  stipendPerMonth Int?
+  location      String?
+  offerDate     DateTime @default(now())
+  joiningDate   DateTime?
+  accepted      Boolean  @default(false)
+  declinedReason String?
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId])
+  @@map("offers")
+}
+
+// ----------------------------------------------------------------------------
+// Platform
+// ----------------------------------------------------------------------------
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  type      NotificationType @default(INFO)
+  link      String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model AIInteraction {
+  id        String            @id @default(cuid())
+  userId    String?
+  kind      AIInteractionKind
+  prompt    String
+  response  String
+  latencyMs Int?
+  provider  String            @default("gemini")
+  createdAt DateTime          @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([kind, createdAt])
+  @@map("ai_interactions")
+}

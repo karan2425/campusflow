@@ -1,0 +1,31 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+coverage/
+*.log
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+apps/ai/data/faiss/*.index
+apps/ai/data/faiss/*.json
+
+# prisma
+apps/api/prisma/migrations/dev.db*
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# build artifacts
+*.tsbuildinfo

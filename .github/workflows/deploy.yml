@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------ Vercel
+  web:
+    name: Deploy web → Vercel
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_TELEMETRY_DISABLED: '1'
+
+      - name: Deploy prebuilt output
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+  # ------------------------------------------------- Render (API) + Cloud Run AI
+  api:
+    name: Deploy API → Render
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Trigger Render deploy hook
+        run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL not configured — skipping."
+            exit 0
+          fi
+          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+          echo "Render deploy triggered."
+
+  ai:
+    name: Deploy AI → Google Cloud Run
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to Google Cloud
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Build and push container
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        run: |
+          gcloud builds submit apps/ai \
+            --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/campusflow-ai:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        run: |
+          gcloud run deploy campusflow-ai \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/campusflow-ai:${{ github.sha }} \
+            --region asia-south1 \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
+            --memory 1Gi \
+            --port 8000
+
+      - name: Skipped (no GCP credentials)
+        if: ${{ secrets.GCP_SA_KEY == '' }}
+        run: echo "GCP_SA_KEY not configured — skipping AI deploy."

@@ -1,0 +1,87 @@
+# CampusFlow — full local stack.
+#
+#   docker compose up -d postgres     # just the database (fastest dev loop)
+#   docker compose up --build         # everything: postgres + api + ai + web
+#
+# Then open http://localhost:3000 and sign in with a demo account
+# (see README → Demo accounts).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: campusflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: campusflow
+      POSTGRES_PASSWORD: campusflow
+      POSTGRES_DB: campusflow
+    ports:
+      - '5432:5432'
+    volumes:
+      - campusflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U campusflow -d campusflow']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ai:
+    build:
+      context: ./apps/ai
+    container_name: campusflow-ai
+    restart: unless-stopped
+    environment:
+      PORT: 8000
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:4000
+    ports:
+      - '8000:8000'
+    healthcheck:
+      test: ['CMD-SHELL', 'python -c "import urllib.request;urllib.request.urlopen(\"http://localhost:8000/ai/health\")"']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: campusflow-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://campusflow:campusflow@postgres:5432/campusflow?schema=public
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-please-32-chars}
+      JWT_EXPIRES_IN: 7d
+      CORS_ORIGIN: http://localhost:3000
+      AI_SERVICE_URL: http://ai:8000
+      SEED_DEFAULT_PASSWORD: ${SEED_DEFAULT_PASSWORD:-Password@123}
+    ports:
+      - '4000:4000'
+    # Migrate, seed if the database is empty, then serve.
+    command: sh -c "npx prisma db push --skip-generate && node prisma/seed-if-empty.mjs && node dist/index.js"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: campusflow-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      API_ORIGIN: http://api:4000
+    ports:
+      - '3000:3000'
+
+volumes:
+  campusflow-pgdata:

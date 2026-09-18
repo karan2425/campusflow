@@ -1,0 +1,44 @@
+# Render blueprint — CampusFlow API + managed PostgreSQL.
+# Apply with:  Render Dashboard → New → Blueprint → point at this repo.
+# The Next.js web app deploys separately on Vercel (see vercel.json).
+
+databases:
+  - name: campusflow-db
+    databaseName: campusflow
+    user: campusflow
+    region: singapore
+    plan: free
+    postgresMajorVersion: '16'
+
+services:
+  - type: web
+    name: campusflow-api
+    runtime: node
+    region: singapore
+    plan: free
+    rootDir: .
+    buildCommand: npm ci && npx prisma generate --schema apps/api/prisma/schema.prisma && npm --workspace @campusflow/api run build
+    startCommand: cd apps/api && npx prisma db push --skip-generate && node dist/index.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: campusflow-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: SEED_DEFAULT_PASSWORD
+        value: Password@123
+      # Point this at the deployed FastAPI service (Cloud Run, Fly, etc.)
+      - key: AI_SERVICE_URL
+        sync: false
+      # Must include the deployed Vercel origin, e.g. https://campusflow.vercel.app
+      - key: CORS_ORIGIN
+        sync: false

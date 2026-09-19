@@ -9,6 +9,15 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+# Every job maps its secrets to job-level `env` and then guards its steps with a
+# `ready` output. This is deliberate: the `secrets` context is NOT available in a
+# step-level `if:` (only env, github, inputs, job, matrix, needs, runner, steps,
+# strategy and vars are), and referencing it there makes the whole workflow fail
+# to parse with zero jobs created.
+#
+# With this pattern an unconfigured provider produces a green run that logs a
+# notice, instead of a red X on every push.
+
 jobs:
   # ------------------------------------------------------------------ Vercel
   web:
@@ -16,85 +25,124 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
 
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
     steps:
+      - name: Check for Vercel credentials
+        id: guard
+        run: |
+          if [ -z "${VERCEL_TOKEN}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::VERCEL_TOKEN is not configured. Add VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID to enable the web deploy."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.guard.outputs.ready == 'true'
 
       - uses: actions/setup-node@v4
+        if: steps.guard.outputs.ready == 'true'
         with:
           node-version: 20
           cache: npm
 
       - name: Install Vercel CLI
+        if: steps.guard.outputs.ready == 'true'
         run: npm i -g vercel@latest
 
       - name: Pull Vercel environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        if: steps.guard.outputs.ready == 'true'
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
 
       - name: Build
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        if: steps.guard.outputs.ready == 'true'
+        run: vercel build --prod --token="$VERCEL_TOKEN"
         env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           NEXT_TELEMETRY_DISABLED: '1'
 
       - name: Deploy prebuilt output
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        if: steps.guard.outputs.ready == 'true'
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
 
-  # ------------------------------------------------- Render (API) + Cloud Run AI
+  # ------------------------------------------------------------------ Render
   api:
     name: Deploy API → Render
     runs-on: ubuntu-latest
     environment: production
 
+    env:
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+
     steps:
-      - name: Trigger Render deploy hook
+      - name: Check for Render deploy hook
+        id: guard
         run: |
-          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
-            echo "RENDER_DEPLOY_HOOK_URL not configured — skipping."
-            exit 0
+          if [ -z "${RENDER_DEPLOY_HOOK_URL}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::RENDER_DEPLOY_HOOK_URL is not configured. Add the deploy hook URL from your Render service to enable the API deploy."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
-          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+
+      - name: Trigger Render deploy hook
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
           echo "Render deploy triggered."
 
+  # --------------------------------------------------------------- Cloud Run
   ai:
     name: Deploy AI → Google Cloud Run
     runs-on: ubuntu-latest
     environment: production
 
-    steps:
-      - uses: actions/checkout@v4
+    env:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-      - id: auth
-        name: Authenticate to Google Cloud
-        if: ${{ secrets.GCP_SA_KEY != '' }}
+    steps:
+      - name: Check for Google Cloud credentials
+        id: guard
+        run: |
+          if [ -z "${GCP_SA_KEY}" ] || [ -z "${GCP_PROJECT_ID}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::GCP_SA_KEY and GCP_PROJECT_ID are not configured. Add them to enable the AI service deploy."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.ready == 'true'
+
+      - name: Authenticate to Google Cloud
+        if: steps.guard.outputs.ready == 'true'
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          credentials_json: ${{ env.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: steps.guard.outputs.ready == 'true'
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: Build and push container
-        if: ${{ secrets.GCP_SA_KEY != '' }}
+        if: steps.guard.outputs.ready == 'true'
         run: |
           gcloud builds submit apps/ai \
-            --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/campusflow-ai:${{ github.sha }}
+            --tag "gcr.io/${GCP_PROJECT_ID}/campusflow-ai:${GITHUB_SHA}"
 
       - name: Deploy to Cloud Run
-        if: ${{ secrets.GCP_SA_KEY != '' }}
+        if: steps.guard.outputs.ready == 'true'
         run: |
           gcloud run deploy campusflow-ai \
-            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/campusflow-ai:${{ github.sha }} \
+            --image "gcr.io/${GCP_PROJECT_ID}/campusflow-ai:${GITHUB_SHA}" \
             --region asia-south1 \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
+            --set-env-vars "GEMINI_API_KEY=${GEMINI_API_KEY}" \
             --memory 1Gi \
             --port 8000
-
-      - name: Skipped (no GCP credentials)
-        if: ${{ secrets.GCP_SA_KEY == '' }}
-        run: echo "GCP_SA_KEY not configured — skipping AI deploy."

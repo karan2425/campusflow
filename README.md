@@ -1,5 +1,10 @@
 # 🎓 CampusFlow
 
+[![CI](https://github.com/karan2425/campusflow/actions/workflows/ci.yml/badge.svg)](https://github.com/karan2425/campusflow/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node 20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](apps/ai/requirements.txt)
+
 **An AI-powered college management & placement platform** — student records, attendance,
 courses, recruiter drives, the full application pipeline, placement analytics, and a
 Gemini + FAISS AI layer that scores résumés, matches candidates to roles and generates
